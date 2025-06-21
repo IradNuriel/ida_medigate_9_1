@@ -5,6 +5,7 @@ import ida_bytes
 import ida_hexrays
 import ida_name
 import ida_typeinf
+import ida_nalt
 import ida_xref
 import ida_idaapi
 import idautils
@@ -218,8 +219,8 @@ def install_vtables_union(
 ):
     """
     Installs a vtables union in place of an existing vtable or creates a new one.
-    Updated to use `idc.get_struc_name`, `ida_idaapi.set_struc_name`, `ida_idaapi.get_struc`,
-    `idc.get_struc_size`, `ida_idaapi.add_struc_member`, `ida_idaapi.get_member_by_id`,
+    Updated to use `idc.get_struc_name`, `idc.set_struc_name`, `idc.get_struc`,
+    `idc.get_struc_size`, `idc.add_struc_member`, `ida_idaapi.get_member_by_id`,
     and `ida_idaapi.set_member_tinfo`.
     """
     logging.debug(
@@ -235,7 +236,7 @@ def install_vtables_union(
         old_vtable_class_name = get_class_vtable_struct_name(class_name, offset)
         old_vtable_sptr = utils.get_sptr_by_name(old_vtable_class_name)
     vtables_union_name = old_vtable_class_name
-    if old_vtable_sptr and not ida_idaapi.set_struc_name( # Changed from ida_struct.set_struc_name
+    if old_vtable_sptr and not idc.set_struc_name( # Changed from ida_struct.set_struc_name
         old_vtable_sptr.id, old_vtable_class_name + "_orig"
     ):
         logging.exception(
@@ -262,15 +263,15 @@ def install_vtables_union(
         vtables_union, vtables_union_vtable_field_name, vtable_member_tinfo
     )
     parent_struct = utils.get_sptr_by_name(class_name)
-    flag = ida_idaapi.FF_STRUCT
-    mt = ida_idaapi.opinfo_t()
+    flag = idc.FF_STRUCT
+    mt = ida_nalt.opinfo_t()
     mt.tid = vtables_union_id
     struct_size = idc.get_struc_size(vtables_union_id) # Changed from ida_struct.get_struc_size
     vtables_union_ptr_type = utils.get_typeinf_ptr(vtables_union_name)
     if class_vtable_member:
         member_ptr = class_vtable_member
     else:
-        member_id = ida_idaapi.add_struc_member( # Changed from ida_struct.add_struc_member
+        member_id = idc.add_struc_member( # Changed from ida_struct.add_struc_member
             parent_struct,
             get_class_vtable_field_name(class_name),
             offset,
@@ -434,7 +435,7 @@ def post_struct_member_type_change(member):
     xrefs = filter(lambda x: x.type == ida_xref.dr_I and x.user == 1, xrefs)
     for xref in xrefs:
         if utils.is_func(xref.to):
-            function_ptr_tinfo = ida_idaapi.tinfo_t()
+            function_ptr_tinfo = ida_typeinf.tinfo_t()
             # Changed from ida_struct.get_member_tinfo
             ok = ida_idaapi.get_member_tinfo(function_ptr_tinfo, member)
             if ok and function_ptr_tinfo.is_funcptr():
