@@ -4,6 +4,7 @@ import random
 import ida_bytes
 import ida_funcs
 import ida_hexrays
+import ida_ida
 import ida_kernwin
 import ida_lines
 import ida_nalt
@@ -11,7 +12,7 @@ import ida_name
 import ida_search
 import ida_typeinf
 import ida_xref
-import idaapi
+import ida_idaapi
 import idautils
 import idc
 
@@ -23,31 +24,30 @@ NOT_UNION = 0
 
 def update_word_len(code, old=0):
     global WORD_LEN
-    info = idaapi.get_inf_structure()
-    if info.is_64bit():
-        logging.debug("is 32 bit")
+    if  ida_ida.inf_is_64bit():
+        logging.debug("is 64 bit")
         WORD_LEN = 8
-    elif info.is_32bit():
+    elif ida_ida.inf_is_32bit_exactly():
         logging.debug("is 32 bit")
         WORD_LEN = 4
 
 
-idaapi.notify_when(idaapi.NW_OPENIDB, update_word_len)
+ida_idaapi.notify_when(ida_idaapi.NW_OPENIDB, update_word_len)
 
 
-def get_word(ea: idaapi.ea_t):
+def get_word(ea: ida_idaapi.ea_t):
     if WORD_LEN == 4:
-        return idaapi.get_32bit(ea)
+        return ida_bytes.get_32bit(ea)
     elif WORD_LEN == 8:
-        return idaapi.get_64bit(ea)
+        return ida_bytes.get_64bit(ea)
     return None
 
 
-def get_ptr(ea: idaapi.ea_t):
+def get_ptr(ea: ida_idaapi.ea_t):
     return get_word(ea)
 
 
-def make_word(ea: idaapi.ea_t):
+def make_word(ea: ida_idaapi.ea_t):
     if WORD_LEN == 4:
         return ida_bytes.create_dword(ea, 4)
     elif WORD_LEN == 8:
@@ -55,11 +55,11 @@ def make_word(ea: idaapi.ea_t):
     return None
 
 
-def make_ptr(ea: idaapi.ea_t):
+def make_ptr(ea: ida_idaapi.ea_t):
     return make_word(ea)
 
 
-def is_func(ea: idaapi.ea_t):
+def is_func(ea: ida_idaapi.ea_t):
     func: ida_funcs.func_t | None = ida_funcs.get_func(ea)
     if func is not None and func.start_ea == ea:
         return True
@@ -70,7 +70,7 @@ def get_funcs_list():
     pass
 
 
-def get_drefs(ea: idaapi.ea_t):
+def get_drefs(ea: ida_idaapi.ea_t):
     xref = ida_xref.get_first_dref_to(ea)
     while xref != BADADDR:
         yield xref
@@ -93,15 +93,15 @@ def get_func_details(func_ea):
     xfunc = ida_hexrays.decompile(func_ea)
     if xfunc is None:
         return None
-    func_details = idaapi.func_type_data_t()
+    func_details = ida_typeinf.func_type_data_t()
     xfunc.type.get_func_details(func_details)
     return func_details
 
 
 def update_func_details(func_ea, func_details):
-    function_tinfo = idaapi.tinfo_t()
+    function_tinfo = ida_typeinf.tinfo_t()
     function_tinfo.create_func(func_details)
-    if not ida_typeinf.apply_tinfo(func_ea, function_tinfo, idaapi.TINFO_DEFINITE):
+    if not ida_typeinf.apply_tinfo(func_ea, function_tinfo, ida_typeinf.TINFO_DEFINITE):
         return None
     return function_tinfo
 
@@ -115,13 +115,13 @@ def add_to_struct(
     overwrite=False,
 ) -> tuple[int, ida_typeinf.udm_t] | None:
     mt = None
-    flag = idaapi.FF_DWORD
+    flag = ida_bytes.FF_DWORD
     member_size = WORD_LEN
     if member_type is not None and (member_type.is_struct() or member_type.is_union()):
         logging.debug("Is struct!")
         substruct = extract_struct_from_tinfo(member_type)
         if substruct is not None:
-            flag = idaapi.FF_STRUCT
+            flag = ida_bytes.FF_STRUCT
             mt = ida_nalt.opinfo_t()
             substruct_tid = substruct.get_tid()
             mt.tid = substruct_tid
@@ -130,11 +130,11 @@ def add_to_struct(
             )
             member_size = substruct.get_size()
     elif WORD_LEN == 4:
-        flag = idaapi.FF_DWORD
+        flag = ida_bytes.FF_DWORD
     elif WORD_LEN == 8:
-        flag = idaapi.FF_QWORD
+        flag = ida_bytes.FF_QWORD
     if is_offset:
-        flag |= idaapi.FF_0OFF
+        flag |= ida_bytes.FF_0OFF
         mt = ida_nalt.opinfo_t()
         r = ida_nalt.refinfo_t()
         r.init(ida_nalt.get_reftype_by_size(WORD_LEN) | ida_nalt.REFINFO_NOBASE)
@@ -222,7 +222,7 @@ def get_member_substruct(member: ida_typeinf.udm_t):
     member_type = get_member_tinfo(member)
     if member_type is not None and member_type.is_struct():
         return member_type.get_type_name()
-    elif member.flag & idaapi.FF_STRUCT == idaapi.FF_STRUCT:
+    elif member.flag & ida_bytes.FF_STRUCT == ida_bytes.FF_STRUCT:
         return get_sptr(member)
     return None
 
@@ -259,7 +259,7 @@ def get_or_create_struct(struct_name):
 
 
 def get_signed_int(ea):
-    x = idaapi.get_dword(ea)
+    x = ida_bytes.get_dword(ea)
     if x & (1 << 31):
         return ((1 << 32) - x) * (-1)
     return x
@@ -294,7 +294,7 @@ def expand_struct(struct_id: int, new_size: int):
                     name=marker_name,
                     type=ida_typeinf.BTF_VOID,
                     offset=member.soff + new_size,
-                    etf_flags=idaapi.FF_DATA | idaapi.FF_BYTE,
+                    etf_flags=ida_bytes.FF_DATA | ida_bytes.FF_BYTE,
                 )
                 logging.debug(
                     "Delete member (0x%x-0x%x)", member.soff, member.soff + new_size - 1
@@ -306,7 +306,7 @@ def expand_struct(struct_id: int, new_size: int):
                         old_name,
                         struct_id,
                         offset,
-                        idaapi.FF_STRUCT | idaapi.FF_DATA,
+                        ida_bytes.FF_STRUCT | ida_bytes.FF_DATA,
                     ]
                 )
             else:
