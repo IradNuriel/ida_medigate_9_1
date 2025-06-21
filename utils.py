@@ -2,7 +2,6 @@ import logging
 import random
 
 import ida_bytes
-import ida_enum
 import ida_funcs
 import ida_hexrays
 import ida_kernwin
@@ -426,39 +425,23 @@ def get_code_xrefs(ea):
         xref = ida_xref.get_next_cref_to(ea, xref)
 
 
-def get_enum_tinfo_by_name(enum_name_str):
-    tif = ida_typeinf.tinfo_t()
-    # tinfo_t has 2 signatures for get_named_type function
-    # 1. get_named_type(til: const til_t *, name: str, decl_type: type_t=BTF_TYPEDEF, resolve: bool=true, try_ordinal: bool=true) -> bool
-    # 2. get_named_type(name: str, decl_type: type_t=BTF_TYPEDEF, resolve: bool=true, try_ordinal: bool=true) -> bool
-    # The second option create a tinfo_t object for an existing named type
-    # Therefore, we chose the first option, and gave None as the first parameter
-    if tif.get_named_type(None, enum_name_str):
-        if tif.is_enum():
-            return tif
-    return None
-
-
-def get_enum_const_by_value(enum_tinfo, value, serial=0):
+def get_enum_const_by_value(enum_tinfo: ida_typeinf.tinfo_t, value, serial=0):
     if not enum_tinfo or not enum_tinfo.is_enum():
         return None
     enum_data = ida_typeinf.enum_type_data_t()
     if not enum_tinfo.get_enum_details(enum_data):
         return None
-    for i in range(enum_data.size()):
-        edm = enum_data[i]
-        if edm.value == value and edm.serial == serial:
+    for i, edm in enumerate(enum_data):
+        if edm.value == value and enum_data.get_serial(i) == serial:
             return edm
     return None
 
 
 def get_enum_const_name(enum_name, const_val):
-    enum_tinfo = get_enum_tinfo_by_name(enum_name)
+    enum_tinfo = ida_typeinf.tinfo_t(name=enum_name)
     if enum_tinfo:
-        # 1. Find the enum constant (edm_t) first, e.g., by value
         edm_obj = get_enum_const_by_value(enum_tinfo, const_val)
         if edm_obj:
-            # The const name is stored in edm_t object
             return edm_obj.name
         return None
 
