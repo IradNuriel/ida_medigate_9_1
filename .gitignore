@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+*.til
+*.id0
+*.id1
+*.id2
+*.nam
+*.idb
+*.i64
+.venv/*
+.vscode/

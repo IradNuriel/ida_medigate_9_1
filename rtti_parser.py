@@ -1,11 +1,11 @@
 import logging
 
 import ida_name
-import ida_struct
-import idaapi
+import ida_typeinf
+import ida_bytes
 import idautils
 import idc
-from idaapi import BADADDR
+from ida_idaapi import BADADDR
 
 from . import cpp_utils
 from . import utils
@@ -77,7 +77,7 @@ class RTTIParser(object):
         self.name, self.struct_id = utils.add_struc_retry(self.name)
         if self.struct_id == BADADDR or self.name is None:
             return False
-        self.struct_ptr = ida_struct.get_struc(self.struct_id)
+        self.struct_ptr = ida_typeinf.tinfo_t(tid=self.struct_id)
         if self.struct_ptr is None:
             logging.exception("self.struct_ptr is None at %s", self.name)
         previous_parent_offset = 0
@@ -91,8 +91,8 @@ class RTTIParser(object):
                 utils.expand_struct(
                     previous_parent_struct_id, parent_offset - previous_parent_offset
                 )
-            baseclass_id = ida_struct.get_struc_id(parent_name)
-            baseclass_size = ida_struct.get_struc_size(baseclass_id)
+            baseclass_id = ida_typeinf.tinfo_t(name=parent_name).get_tid()
+            baseclass_size = ida_typeinf.tinfo_t(name=parent_name).get_size()
             if baseclass_id == BADADDR or baseclass_size == 0:
                 logging.warning(
                     "bad struct id or size: %s(0x%x:%s) - %s, %d",
@@ -176,13 +176,13 @@ class GccRTTIParser(RTTIParser):
     def init_parser(cls):
         super(GccRTTIParser, cls).init_parser()
         cls.type_vmi = (
-            ida_name.get_name_ea(idaapi.BADADDR, cls.VMI) + cls.OFFSET_FROM_TYPEINF_SYM
+            ida_name.get_name_ea(BADADDR, cls.VMI) + cls.OFFSET_FROM_TYPEINF_SYM
         )
         cls.type_si = (
-            ida_name.get_name_ea(idaapi.BADADDR, cls.SI) + cls.OFFSET_FROM_TYPEINF_SYM
+            ida_name.get_name_ea(BADADDR, cls.SI) + cls.OFFSET_FROM_TYPEINF_SYM
         )
         cls.type_none = (
-            ida_name.get_name_ea(idaapi.BADADDR, cls.NONE) + cls.OFFSET_FROM_TYPEINF_SYM
+            ida_name.get_name_ea(BADADDR, cls.NONE) + cls.OFFSET_FROM_TYPEINF_SYM
         )
         cls.types = (cls.type_vmi, cls.type_si, cls.type_none)
 
@@ -237,7 +237,7 @@ class GccRTTIParser(RTTIParser):
 
     @classmethod
     def parse_vmi_typeinfo(cls, typeinfo_ea):
-        base_classes_num = idaapi.get_32bit(
+        base_classes_num = ida_bytes.get_32bit(
             typeinfo_ea + cls.VMI_TYPEINFO_BASE_CLASSES_NUM_OFFSET
         )
         parents = []

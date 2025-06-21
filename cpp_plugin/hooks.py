@@ -6,8 +6,8 @@ import ida_idp
 import ida_kernwin
 import ida_nalt
 import ida_name
-import ida_struct
-import idaapi
+import ida_pro
+import ida_typeinf
 import idc
 from idc import BADADDR
 from .. import cpp_utils, utils
@@ -55,8 +55,10 @@ class CPPHooks(ida_idp.IDB_Hooks):
 
     def ti_changed(self, ea, typeinf, fnames):
         if self.is_decompiler_on:
-            res = ida_struct.get_member_by_id(ea)
-            if res is not None:
+            type_info = ida_typeinf.tinfo_t()
+            udm = ida_typeinf.udm_t()
+            res = type_info.get_udm_by_tid(udm, ea)
+            if res != -1:
                 m, name, sptr = res
                 if sptr.is_frame():
                     func = ida_funcs.get_func(ida_frame.get_func_by_frame(sptr.id))
@@ -75,14 +77,15 @@ class CPPUIHooks(ida_kernwin.View_Hooks):
         # Decompiler or Structures window
         func_cand_name = None
         place, x, y = ida_kernwin.get_custom_viewer_place(viewer, False)
-        if place.name() == "structplace_t":  # Structure window:
-            structplace = ida_kernwin.place_t_as_structplace_t(place)
-            if structplace is not None:
-                s = ida_struct.get_struc(ida_struct.get_struc_by_idx(structplace.idx))
+        if place.name() == "tiplace_t":  # Structure window:
+            tiplace: ida_kernwin.tiplace_t = ida_kernwin.place_t_as_tiplace_t(place)
+            if tiplace is not None:
+                s = ida_typeinf.tinfo_t(tid=ida_nalt.get_strid(tiplace.ordinal))
                 if s:
-                    member = ida_struct.get_member(s, structplace.offset)
-                    if member:
-                        func_cand_name = ida_struct.get_member_name(member.id)
+                    member = ida_typeinf.udm_t()
+                    ret_val = s.get_udm_by_offset(member, tiplace.calc_udm_offset())
+                    if ret_val:
+                        func_cand_name = member.name
         if func_cand_name is None:
             line = utils.get_curline_striped_from_viewer(viewer)
             func_cand_name = cpp_utils.find_valid_cppname_in_line(line, x)
@@ -99,7 +102,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         self.counter = 0
         self.selections = []
 
-    def get_vtables_union_name(self, expr):
+    def get_vtables_union_name(self, expr) -> str | None:
         if expr.op != ida_hexrays.cot_memref:
             return None
         typeinf = expr.type
@@ -107,7 +110,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
             return None
         if not typeinf.is_union():
             return None
-        union_name = typeinf.get_type_name()
+        union_name: str = typeinf.get_type_name()
         if not cpp_utils.is_vtables_union_name(union_name):
             return None
         return union_name
@@ -126,16 +129,16 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
             return None
         return chain
 
-    def find_best_member(self, chain, union_name):
+    def find_best_member(self, chain, union_name: str) -> ida_typeinf.udm_t:
         for cand in chain:
-            result = ida_struct.get_member_by_fullname(union_name + "." + cand)
-            if result:
-                m, s = result
-                logging.debug("Found class: %s, offset=%d", cand, m.soff)
+            result: int = ida_typeinf.get_udm_by_fullname(union_name + "." + cand)
+            if result != -1:
+                _, m = ida_typeinf.tinfo_t(name=union_name).get_udm(index=result)
+                logging.debug("Found class: %s, offset=%d", cand, m.offset)
                 return m
         return None
 
-    def get_vtable_sptr(self, m):
+    def get_vtable_sptr(self, m: ida_typeinf.udm_t):
         vtable_type = utils.get_member_tinfo(m)
         if not (vtable_type and vtable_type.is_ptr()):
             logging.debug("vtable_type isn't ptr %s", vtable_type)
@@ -146,9 +149,10 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
             logging.debug("vtable isn't struct (%s)", vtable_struc_typeinf.dstr())
             return None
 
-        vtable_struct_name = vtable_struc_typeinf.get_type_name()
-        vtable_sptr = utils.get_sptr_by_name(vtable_struct_name)
-        if vtable_sptr is None:
+        vtable_struct_name: str = vtable_struc_typeinf.get_type_name()
+        try:
+            vtable_sptr = utils.get_sptr_by_name(vtable_struct_name)
+        except ValueError:
             logging.debug(
                 "0x%x: Oh no %s is not a valid struct",
                 self.cfunc.entry_ea,
@@ -223,7 +227,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
                     "0x%x idx type isn't struct %s", self.cfunc.entry_ea, idx_cexpr.type
                 )
                 return -1
-            idx_struct = utils.get_struc_from_tinfo(idx_cexpr.type)
+            idx_struct: ida_typeinf.tinfo_t = idx_cexpr.type
             if idx_struct is None:
                 logging.debug(
                     "0x%x idx type isn't pointing to struct %s",
@@ -231,14 +235,14 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
                     idx_cexpr.type,
                 )
                 return -1
-            struct_size = ida_struct.get_struc_size(idx_struct)
+            struct_size = idx_struct.get_size()
             num *= struct_size
         return num
 
-    def get_vtable_member_type(self, vtable_sptr, offset):
-        vtable_struct_name = ida_struct.get_struc_name(vtable_sptr.id)
+    def get_vtable_member_type(self, vtable_sptr: ida_typeinf.tinfo_t, offset: int):
+        vtable_struct_name: str = vtable_sptr.get_type_name()
         try:
-            funcptr_member = ida_struct.get_member(vtable_sptr, offset)
+            funcptr_idx, funcptr_member = vtable_sptr.get_udm_by_offset(offset)
         except TypeError as e:
             logging.exception("0x%x: bad offset: 0x%x", self.cfunc.entry_ea, offset)
             return None
@@ -263,7 +267,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
 
         return funcptr_member_type
 
-    def find_funcptr(self, m):
+    def find_funcptr(self, m: ida_typeinf.udm_t) -> ida_typeinf.tinfo_t | None:
         ancestors = self.get_ancestors()
         if ancestors is None:
             return None
@@ -276,7 +280,8 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         if offset == -1:
             return None
         funcptr_member_type = self.get_vtable_member_type(
-            vtable_sptr, funcptr_expr.m + offset
+            vtable_sptr,
+            funcptr_expr.m + offset
         )
         return funcptr_member_type
 
@@ -332,24 +337,24 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         return 0
 
 
-class HexRaysHooks(idaapi.Hexrays_Hooks):
+class HexRaysHooks(ida_hexrays.Hexrays_Hooks):
     def __init__(self, *args):
-        idaapi.Hexrays_Hooks.__init__(self, *args)
+        ida_hexrays.Hexrays_Hooks.__init__(self, *args)
         self.another_decompile_ea = False
 
     def maturity(self, cfunc, maturity):
-        if maturity in [idaapi.CMAT_FINAL]:
+        if maturity in [ida_hexrays.CMAT_FINAL]:
             if self.another_decompile_ea:
                 self.another_decompile_ea = None
                 return 0
-            # if maturity in [idaapi. CMAT_CPA]:
-            # if maturity in [idaapi.CPA]:
+            # if maturity in [ida_hexrays.CMAT_CPA]:
+            # if maturity in [ida_hexrays.CPA]:
             pfv = Polymorphism_fixer_visitor_t(cfunc)
             pfv.apply_to_exprs(cfunc.body, None)
             logging.debug("results: %s", pfv.selections)
             if pfv.selections != []:
                 for ea, offset, funcptr_member_type in pfv.selections:
-                    intvec = idaapi.intvec_t()
+                    intvec = ida_pro.intvec_t()
                     # TODO: Think if needed to distinguished between user
                     #   union members chooses and plugin chooses
                     if not cfunc.get_user_union_selection(ea, intvec):
