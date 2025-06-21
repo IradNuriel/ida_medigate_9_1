@@ -425,7 +425,15 @@ def get_code_xrefs(ea):
         xref = ida_xref.get_next_cref_to(ea, xref)
 
 
-def get_enum_const_by_value(enum_tinfo: ida_typeinf.tinfo_t, value, serial=0):
+def get_enum_tinfo_by_name(enum_name_str: str) -> ida_typeinf.tinfo_t | None:
+    try:
+        tif = ida_typeinf.tinfo_t(name=enum_name_str)
+    except ValueError:
+        return None
+    return tif if tif.is_enum() else None
+
+
+def get_enum_const_by_value(enum_tinfo, value, serial=0):
     if not enum_tinfo or not enum_tinfo.is_enum():
         return None
     enum_data = ida_typeinf.enum_type_data_t()
