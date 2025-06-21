@@ -574,7 +574,14 @@ def create_vtable_struct(sptr, name, vtable_offset, parent_name=None):
         logging.exception(
             "create_vtable_struct(%s, %d): vtable_name is" " None", name, vtable_offset
         )
-    vtable_id = idc.add_struc(BADADDR, vtable_name, False)
+    udt = ida_typeinf.udt_type_data_t()
+    vtable_struct= ida_typeinf.tinfo_t()
+    udt.is_union = False
+    if (
+        vtable_struct.create_udt(udt) and
+        vtable_struct.set_named_type(None, vtable_name) == ida_typeinf.TERR_OK
+    ):
+        vtable_id = vtable_struct.get_tid()
     if vtable_id == BADADDR:
         logging.exception("Couldn't create struct %s", vtable_name)
     vtable_struct = ida_typeinf.tinfo_t(tid=vtable_id)
