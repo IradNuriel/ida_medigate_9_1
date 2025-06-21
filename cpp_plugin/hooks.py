@@ -6,8 +6,8 @@ import ida_idp
 import ida_kernwin
 import ida_nalt
 import ida_name
+import ida_pro
 import ida_typeinf
-import idaapi
 import idc
 from idc import BADADDR
 from .. import cpp_utils, utils
@@ -337,24 +337,24 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         return 0
 
 
-class HexRaysHooks(idaapi.Hexrays_Hooks):
+class HexRaysHooks(ida_hexrays.Hexrays_Hooks):
     def __init__(self, *args):
-        idaapi.Hexrays_Hooks.__init__(self, *args)
+        ida_hexrays.Hexrays_Hooks.__init__(self, *args)
         self.another_decompile_ea = False
 
     def maturity(self, cfunc, maturity):
-        if maturity in [idaapi.CMAT_FINAL]:
+        if maturity in [ida_hexrays.CMAT_FINAL]:
             if self.another_decompile_ea:
                 self.another_decompile_ea = None
                 return 0
-            # if maturity in [idaapi. CMAT_CPA]:
-            # if maturity in [idaapi.CPA]:
+            # if maturity in [ida_hexrays.CMAT_CPA]:
+            # if maturity in [ida_hexrays.CPA]:
             pfv = Polymorphism_fixer_visitor_t(cfunc)
             pfv.apply_to_exprs(cfunc.body, None)
             logging.debug("results: %s", pfv.selections)
             if pfv.selections != []:
                 for ea, offset, funcptr_member_type in pfv.selections:
-                    intvec = idaapi.intvec_t()
+                    intvec = ida_pro.intvec_t()
                     # TODO: Think if needed to distinguished between user
                     #   union members chooses and plugin chooses
                     if not cfunc.get_user_union_selection(ea, intvec):

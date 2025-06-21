@@ -218,7 +218,7 @@ def get_sptr_by_name(struct_name: str):
     return ida_typeinf.tinfo_t(name=struct_name)
 
 
-def get_member_substruct(member: ida_typeinf.udm_t):
+def get_member_substruct(member: ida_typeinf.udm_t) -> ida_typeinf.tinfo_t | None:
     member_type = get_member_tinfo(member)
     if member_type is not None and member_type.is_struct():
         return member_type.get_type_name()
@@ -466,7 +466,7 @@ def set_name_retry(ea, name, name_func=ida_name.set_name, max_attempts=100):
     return suggested_name
 
 
-def add_struc_retry(name, max_attempts=100):
+def add_struc_retry(name: str, max_attempts: int=100) -> tuple[(str | None), int]:
     i = 0
     suggested_name = name
     udt = ida_typeinf.udt_type_data_t()
