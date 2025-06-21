@@ -426,17 +426,12 @@ def get_code_xrefs(ea):
         xref = ida_xref.get_next_cref_to(ea, xref)
 
 
-def get_enum_tinfo_by_name(enum_name_str):
-    tif = ida_typeinf.tinfo_t()
-    # tinfo_t has 2 signatures for get_named_type function
-    # 1. get_named_type(til: const til_t *, name: str, decl_type: type_t=BTF_TYPEDEF, resolve: bool=true, try_ordinal: bool=true) -> bool
-    # 2. get_named_type(name: str, decl_type: type_t=BTF_TYPEDEF, resolve: bool=true, try_ordinal: bool=true) -> bool
-    # The second option create a tinfo_t object for an existing named type
-    # Therefore, we chose the first option, and gave None as the first parameter
-    if tif.get_named_type(None, enum_name_str):
-        if tif.is_enum():
-            return tif
-    return None
+def get_enum_tinfo_by_name(enum_name_str: str) -> ida_typeinf.tinfo_t | None:
+    try:
+        tif = ida_typeinf.tinfo_t(name=enum_name_str)
+    except ValueError:
+        return None:
+    return tif if tif.is_enum() else None
 
 
 def get_enum_const_by_value(enum_tinfo, value, serial=0):
