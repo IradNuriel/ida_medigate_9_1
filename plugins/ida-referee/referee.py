@@ -6,6 +6,7 @@ import logging
 import traceback
 
 import idaapi
+import ida_typeinf
 
 logging.basicConfig(level=logging.WARN)
 log = logging.getLogger("referee")
@@ -95,11 +96,11 @@ def add_struct_xrefs(cfunc):
                         break
             return ea
 
-        def add_dref(self, ea, struct_id, flags, member_id=None):
+        def add_dref(self, ea, struct_id, flags, member=None, member_id=None):
             if ((ea, struct_id, member_id) not in self.xrefs or
                     flags < self.xrefs[(ea, struct_id, member_id)]):
                 self.xrefs[(ea, struct_id, member_id)] = flags
-                strname = idaapi.get_struc_name(struct_id)
+                strname = ida_typeinf.tinfo_t(tid=struct_id).get_type_name()
                 if member_id is None:
                     idaapi.add_dref(ea, struct_id, flags)
                     log.debug((" 0x{:X} \t"
@@ -107,12 +108,13 @@ def add_struct_xrefs(cfunc):
                                "{}").format(
                                ea, strname, flags_to_str(flags)))
                 else:
+                    log.debug(f"{member_id}")
                     idaapi.add_dref(ea, member_id, flags)
                     log.debug((" 0x{:X} \t"
                                "member {}.{} \t"
                                "{}").format(
                                ea, strname,
-                               idaapi.get_member_name(member_id),
+                               member_id,
                                flags_to_str(flags)))
             self.save()
 
@@ -152,14 +154,14 @@ def add_struct_xrefs(cfunc):
                 if strname.startswith("struct "):
                     strname = strname[len("struct "):]
 
-                stid = idaapi.get_struc_id(strname)
-                struc = idaapi.get_struc(stid)
-                mem = idaapi.get_member(struc, moff)
+                struc = ida_typeinf.tinfo_t(name=strname)
+                stid = struc.get_tid()
+                mem: ida_typeinf.udm_t = struc.get_udm_by_offset(moff)[1]
 
                 if struc is not None:
                     self.add_dref(ea, stid, dr)
                     if mem is not None:
-                        self.add_dref(ea, stid, dr, mem.id)
+                        self.add_dref(ea, stid, dr, mem.type, mem.type.get_tid())
 
                 else:
                     log.error(("failure from 0x{:X} "
@@ -171,8 +173,8 @@ def add_struct_xrefs(cfunc):
                 if strname.startswith("struct "):
                     strname = strname[len("struct "):]
 
-                stid = idaapi.get_struc_id(strname)
-                struc = idaapi.get_struc(stid)
+                struc = ida_typeinf.tinfo_t(name=strname)
+                stid = struc.get_tid()
 
                 if struc is not None:
                     self.add_dref(ea, stid, dr)

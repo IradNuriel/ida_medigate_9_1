@@ -22,7 +22,7 @@ from idc import BADADDR
 WORD_LEN = None
 NOT_UNION = 0
 
-def update_word_len(code, old=0):
+def update_word_len(_=None, old=0):
     global WORD_LEN
     if  ida_ida.inf_is_64bit():
         logging.debug("is 64 bit")
@@ -77,6 +77,12 @@ def get_drefs(ea: ida_idaapi.ea_t):
         xref = ida_xref.get_next_dref_to(ea, xref)
 
 
+def get_typeinf(typestr):
+    tif = ida_typeinf.tinfo_t()
+    tif.get_named_type(typestr)
+    return tif
+
+
 def get_typeinf_ptr(typeinf: str | ida_typeinf.tinfo_t | None):
     old_typeinf = typeinf
     if isinstance(typeinf, str):
@@ -90,11 +96,15 @@ def get_typeinf_ptr(typeinf: str | ida_typeinf.tinfo_t | None):
 
 
 def get_func_details(func_ea):
+    logging.info(f"{func_ea=}")
     xfunc = ida_hexrays.decompile(func_ea)
+    logging.info(f"{xfunc=}")
     if xfunc is None:
         return None
     func_details = ida_typeinf.func_type_data_t()
+    logging.info(f"{func_details=}")
     xfunc.type.get_func_details(func_details)
+    logging.info(f"{func_details=}")
     return func_details
 
 
@@ -114,7 +124,9 @@ def add_to_struct(
     is_offset=False,
     overwrite=False,
 ) -> tuple[int, ida_typeinf.udm_t] | None:
-    mt = None
+    logging.info(f"{struct=}, {member_name=}, {member_type=}, {offset=}, {is_offset=}, {overwrite=}")
+    mt = ida_nalt.opinfo_t()
+    mt.tid = member_type.get_tid()
     flag = ida_bytes.FF_DWORD
     member_size = WORD_LEN
     if member_type is not None and (member_type.is_struct() or member_type.is_union()):
@@ -125,10 +137,13 @@ def add_to_struct(
             mt = ida_nalt.opinfo_t()
             substruct_tid = substruct.get_tid()
             mt.tid = substruct_tid
+            member_type = ida_typeinf.tinfo_t(tid=substruct_tid)
             logging.debug(
                 f"Is struct: {ida_typeinf.get_tid_name(substruct_tid)}/{substruct_tid}"
             )
             member_size = substruct.get_size()
+    elif member_type is not None and member_type.is_ptr():
+        member_type = member_type
     elif WORD_LEN == 4:
         flag = ida_bytes.FF_DWORD
     elif WORD_LEN == 8:
@@ -141,38 +156,42 @@ def add_to_struct(
         mt.ri = r
 
     new_member_name = member_name
-    member: ida_typeinf.udm_t = struct.get_udm_by_offset(offset)
+    index, member = struct.get_udm_by_offset(offset)
+    i = 0
     if overwrite and member:
         if member.name != member_name:
             logging.debug("Overwriting!")
-            ret_val = struct.rename_udm(offset, member_name)
-            while not ret_val:
+            ret_val = struct.rename_udm(index, member_name)
+            while ret_val != 0:
                 formatted_member_name = f"{member_name}_{i}"
                 i += 1
                 if i > 250:
-                    return None
-                ret_val = struct.rename_udm(offset, formatted_member_name)
+                    return -1, None
+                ret_val = struct.rename_udm(index, formatted_member_name)
 
     else:
-        ret_val = struct.add_udm(type=mt, offset=offset, etf_flags=flag)
+        formatted_member_name = member_name
+        if member:
+            logging.info(f"{formatted_member_name=}, {member_type=}, {offset=}, {flag=}, {member.name=}, {member.offset=}")
+        else:
+            logging.info(f"{formatted_member_name=}, {member_type=}, {offset=}, {flag=}")
+        ret_val = struct.add_udm(formatted_member_name, member_type, offset, flag)
         member: ida_typeinf.udm_t = struct.get_udm_by_offset(offset)
-        logging.debug("Overwriting!")
-        ret_val = struct.rename_udm(offset, member_name)
-        while not ret_val:
+        while ret_val != 0:
             formatted_member_name = f"{member_name}_{i}"
             i += 1
             if i > 250:
-                return None
+                return -1, None
             ret_val = struct.rename_udm(offset, formatted_member_name)
 
-    return struct.get_udm(name=new_member_name)
+    return struct.get_udm(new_member_name)
     
 
 
 def set_func_name(func_ea, func_name):
     counter = 0
     new_name = func_name
-    while not ida_name.set_name(func_ea, new_name):
+    while ida_name.set_name(func_ea, new_name) != 0:
         new_name = func_name + "_%d" % counter
         counter += 1
     return new_name
@@ -230,7 +249,7 @@ def get_member_substruct(member: ida_typeinf.udm_t) -> ida_typeinf.tinfo_t | Non
 def set_member_name(struct: ida_typeinf.tinfo_t, offset: int, new_name: str):
     i = 0
     ret_val = struct.rename_udm(offset, new_name)
-    while not ret_val:
+    while ret_val != 0:
         formatted_new_name = f"{new_name}_{i}"
         i += 1
         if i > 250:
@@ -458,7 +477,7 @@ def force_make_struct(ea, struct_name):
 def set_name_retry(ea, name, name_func=ida_name.set_name, max_attempts=100):
     i = 0
     suggested_name = name
-    while not name_func(ea, suggested_name):
+    while name_func(ea, suggested_name) != 0:
         suggested_name = name + "_" + str(i)
         i += 1
         if i == max_attempts:
