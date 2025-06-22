@@ -369,15 +369,11 @@ def post_func_type_change(pfn):
             member = ida_typeinf.udm_t()
             ida_typeinf.tinfo_t().get_udm_by_tid(member, xref.frm)
             struct = ida_typeinf.tinfo_t(tid=xref.frm)
-            i = 0
-            while True:
-                _, member = struct.get_udm(index=i)
-                if member is None or struct is None:
-                    break
+            index, _ = struct.get_udm(index=0)
+            if member is not None and struct is not None:
                 args_list.append(
-                    [struct, i, func_ptr_typeinf, ida_typeinf.TINFO_DEFINITE]
+                    [struct, index, func_ptr_typeinf, ida_typeinf.TINFO_DEFINITE]
                 )
-                i += 1
     except Exception:
         pass
     return ida_typeinf.tinfo_t.set_udm_type, args_list
