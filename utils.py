@@ -126,9 +126,16 @@ def add_to_struct(
 ) -> tuple[int, ida_typeinf.udm_t] | None:
     logging.info(f"{struct=}, {member_name=}, {member_type=}, {offset=}, {is_offset=}, {overwrite=}")
     mt = ida_nalt.opinfo_t()
+    if member_type is None:
+        member_type = ida_typeinf.tinfo_t(ida_typeinf.BT_INT)
+    if offset == BADADDR:
+        if struct.is_union():
+            offset = 0
+        else:
+            offset = struct.get_size() * 8
+
     mt.tid = member_type.get_tid()
     flag = ida_bytes.FF_DWORD
-    member_size = WORD_LEN
     if member_type is not None and (member_type.is_struct() or member_type.is_union()):
         logging.debug("Is struct!")
         substruct = extract_struct_from_tinfo(member_type)
@@ -141,7 +148,6 @@ def add_to_struct(
             logging.debug(
                 f"Is struct: {ida_typeinf.get_tid_name(substruct_tid)}/{substruct_tid}"
             )
-            member_size = substruct.get_size()
     elif member_type is not None and member_type.is_ptr():
         member_type = member_type
     elif WORD_LEN == 4:
@@ -191,7 +197,7 @@ def add_to_struct(
 def set_func_name(func_ea, func_name):
     counter = 0
     new_name = func_name
-    while ida_name.set_name(func_ea, new_name) != 0:
+    while not ida_name.set_name(func_ea, new_name):
         new_name = func_name + "_%d" % counter
         counter += 1
     return new_name
@@ -213,14 +219,14 @@ def deref_struct_from_tinfo(tinfo: ida_typeinf.tinfo_t):
 
 def extract_struct_from_tinfo(tinfo: ida_typeinf.tinfo_t):
     struct = tinfo
-    if struct is None:
+    if struct is None or struct.is_ptr():
         struct = deref_struct_from_tinfo(tinfo)
     return struct
 
 
 def get_member_tinfo(member: ida_typeinf.udm_t, member_typeinf: ida_typeinf.tinfo_t=None):
     if member_typeinf is None:
-        member_typeinf = idaapi.tinfo_t()
+        member_typeinf = ida_typeinf.tinfo_t()
     member_typeinf = member.type
     return member_typeinf
 
@@ -240,9 +246,7 @@ def get_sptr_by_name(struct_name: str):
 def get_member_substruct(member: ida_typeinf.udm_t) -> ida_typeinf.tinfo_t | None:
     member_type = get_member_tinfo(member)
     if member_type is not None and member_type.is_struct():
-        return member_type.get_type_name()
-    elif member.flag & ida_bytes.FF_STRUCT == ida_bytes.FF_STRUCT:
-        return get_sptr(member)
+        return member_type
     return None
 
 
@@ -308,17 +312,17 @@ def expand_struct(struct_id: int, new_size: int):
             if x_struct is not None:
                 old_name: str = member.name
                 offset: int = member.offset
-                marker_name = "marker_{random.randint(0, 0xFFFFFF)}"
+                marker_name = f"marker_{random.randint(0, 0xFFFFFF)}"
                 x_struct.add_udm(
-                    name=marker_name,
-                    type=ida_typeinf.BTF_VOID,
-                    offset=member.soff + new_size,
-                    etf_flags=ida_bytes.FF_DATA | ida_bytes.FF_BYTE,
+                    marker_name,
+                    ida_typeinf.BTF_UINT8,
+                    member.offset + (8 * new_size),
+                    ida_bytes.FF_DATA | ida_bytes.FF_BYTE,
                 )
                 logging.debug(
-                    "Delete member (0x%x-0x%x)", member.soff, member.soff + new_size - 1
+                    "Delete member (0x%x-0x%x)", member.offset, member.offset + 8 * (new_size - 1)
                 )
-                x_struct.del_udms(member.soff, member.soff + new_size)
+                x_struct.del_udms(member.offset, member.offset + (8 * new_size))
                 fix_list.append(
                     [
                         x_struct.get_tid(),
@@ -331,21 +335,29 @@ def expand_struct(struct_id: int, new_size: int):
             else:
                 logging.warning("Xref wasn't struct_member 0x%x", xref.frm)
 
-    ret = add_to_struct(
-        struct, None, None, new_size - WORD_LEN
+    add_to_struct(
+        struct, "anonymous", None, (new_size - WORD_LEN) * 8
     )
     logging.debug("Now fix args:")
     for fix_args in fix_list:
         x_struct = ida_typeinf.tinfo_t(tid=fix_args[0])
+        logging.info(
+            f"\nFixing struct {x_struct.get_type_name()} with arguments: \n"
+            f"\t name={fix_args[1]}\n"
+            f"\t type={fix_args[2]}\n"
+            f"\t offset={fix_args[3]}\n"
+            f"\t etf_flags={fix_args[4]}\n"
+        )
         ret = x_struct.add_udm(
-            name=fix_args[1],
-            type=ida_typeinf.tinfo_t(fix_args[2]),
-            offset=fix_args[3],
-            etf_flags=fix_args[4]
+            fix_args[1],
+            ida_typeinf.tinfo_t(tid=fix_args[2]),
+            fix_args[3],
+            fix_args[4]
         )
         logging.debug(f"{fix_args} = {ret}")
-        temp_udm_index, _ = x_struct.get_udm_by_offset(x_struct.get_size())
-        x_struct.del_udm(temp_udm_index)
+        temp_udm_index, _ = x_struct.get_udm_by_offset((x_struct.get_size() - 1) * 8)
+        logging.info(f"{temp_udm_index=}")
+        x_struct.del_udm(temp_udm_index, ida_bytes.FF_DATA | ida_bytes.FF_BYTE)
 
 
 def get_curline_striped_from_viewer(viewer):
@@ -470,14 +482,14 @@ def force_make_struct(ea, struct_name):
         return False
     s_size = sptr.get_size()
     ida_bytes.del_items(ea, ida_bytes.DELIT_SIMPLE, s_size)
-    return ida_bytes.create_struct(ea, s_size, sptr.id)
+    return ida_bytes.create_struct(ea, s_size, sptr.get_tid())
 
 
 @batchmode
 def set_name_retry(ea, name, name_func=ida_name.set_name, max_attempts=100):
     i = 0
     suggested_name = name
-    while name_func(ea, suggested_name) != 0:
+    while not name_func(ea, suggested_name):
         suggested_name = name + "_" + str(i)
         i += 1
         if i == max_attempts:
@@ -492,7 +504,7 @@ def add_struc_retry(name: str, max_attempts: int=100) -> tuple[(str | None), int
     type_info = ida_typeinf.tinfo_t()
     udt.is_union = NOT_UNION
     type_info.create_udt(udt)
-    while type_info.set_named_type(None, suggested_name) == ida_typeinf.TERR_OK:
+    while type_info.set_named_type(None, suggested_name) != ida_typeinf.TERR_OK:
         suggested_name = name + "_" + str(i)
         i += 1
         if i == max_attempts:

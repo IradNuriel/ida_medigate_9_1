@@ -1,4 +1,5 @@
 import logging
+import pathlib
 import ida_frame
 import ida_funcs
 import ida_hexrays
@@ -12,9 +13,15 @@ import idc
 from idc import BADADDR
 from .. import cpp_utils, utils
 
+LOG_PATH = pathlib.Path("/tmp/cpp_plugin.log")
+
+if not LOG_PATH.exists():
+    if not LOG_PATH.parent.exists():
+        LOG_PATH.parent.mkdir()
+    LOG_PATH.touch()
 
 logging.basicConfig(
-    filename="/tmp/cpp_plugin.log",
+    filename=LOG_PATH.absolute(),
     filemode="a",
     level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -27,6 +34,7 @@ class CPPHooks(ida_idp.IDB_Hooks):
         self.is_decompiler_on = is_decompiler_on
 
     def renamed(self, ea, new_name, local_name):
+        logging.info(f"in renamed({ea}, {new_name}, {local_name})")
         if utils.is_func(ea):
             func, args_list = cpp_utils.post_func_name_change(new_name, ea)
             self.unhook()
@@ -36,6 +44,7 @@ class CPPHooks(ida_idp.IDB_Hooks):
         return 0
 
     def func_updated(self, pfn):
+        logging.info(f"in func_updated({pfn=})")
         func, args_list = cpp_utils.post_func_type_change(pfn)
         self.unhook()
         for args in args_list:
@@ -44,16 +53,19 @@ class CPPHooks(ida_idp.IDB_Hooks):
         return 0
 
     def renaming_struc_member(self, sptr, mptr, newname):
+        logging.info(f"in renaming_struc_member({sptr=}, {mptr=}, {newname=})")
         if sptr.is_frame():
             return 0
         cpp_utils.post_struct_member_name_change(mptr, newname)
         return 0
 
     def struc_member_changed(self, sptr, mptr):
+        logging.info(f"in struc_member_changed({sptr=}, {mptr=})")
         cpp_utils.post_struct_member_type_change(mptr)
         return 0
 
     def ti_changed(self, ea, typeinf, fnames):
+        logging.info(f"in ti_change({ea=}, {typeinf=}, {fnames=})")
         if self.is_decompiler_on:
             type_info = ida_typeinf.tinfo_t()
             udm = ida_typeinf.udm_t()
@@ -71,6 +83,7 @@ class CPPHooks(ida_idp.IDB_Hooks):
 
 class CPPUIHooks(ida_kernwin.View_Hooks):
     def view_dblclick(self, viewer, point):
+        logging.info(f"in view_dblclick({viewer=}, {point=})")
         widget_type = ida_kernwin.get_widget_type(viewer)
         if not (widget_type == 48 or widget_type == 28):
             return
@@ -103,6 +116,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         self.selections = []
 
     def get_vtables_union_name(self, expr) -> str | None:
+        logging.info(f"in get_vtables_union_name({expr=})")
         if expr.op != ida_hexrays.cot_memref:
             return None
         typeinf = expr.type
@@ -116,6 +130,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         return union_name
 
     def build_classes_chain(self, expr):
+        logging.info(f"in build_classes_chain({expr=})")
         chain = []
         n_expr = expr.x
         while n_expr.op == ida_hexrays.cot_memref:
@@ -130,15 +145,17 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         return chain
 
     def find_best_member(self, chain, union_name: str) -> ida_typeinf.udm_t:
+        logging.info(f"in find_best_member({chain=}, {union_name=})")
         for cand in chain:
             result: int = ida_typeinf.get_udm_by_fullname(union_name + "." + cand)
             if result != -1:
-                _, m = ida_typeinf.tinfo_t(name=union_name).get_udm(index=result)
+                _, m = ida_typeinf.tinfo_t(name=union_name).get_udm(result)
                 logging.debug("Found class: %s, offset=%d", cand, m.offset)
                 return m
         return None
 
     def get_vtable_sptr(self, m: ida_typeinf.udm_t):
+        logging.info(f"in get_vtable_sptr({m=})")
         vtable_type = utils.get_member_tinfo(m)
         if not (vtable_type and vtable_type.is_ptr()):
             logging.debug("vtable_type isn't ptr %s", vtable_type)
@@ -163,6 +180,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         return vtable_sptr
 
     def get_ancestors(self):
+        logging.info(f"in get_ancestors()")
         vtable_expr = self.parents.back().cexpr
         if vtable_expr.op not in (ida_hexrays.cot_memptr, ida_hexrays.cot_memref):
             return None
@@ -210,6 +228,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         return funcptr_parent, funcptr_expr, idx_cexpr, vtable_expr
 
     def fix_member_idx(self, idx_cexpr):
+        logging.info(f"in fix_member_idx({idx_cexpr=})")
         num = 0
         if idx_cexpr:
             # wrong vtable*, so it might be too short struct, like:
@@ -240,6 +259,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         return num
 
     def get_vtable_member_type(self, vtable_sptr: ida_typeinf.tinfo_t, offset: int):
+        logging.info(f"in get_vtable_member_type({vtable_sptr=}, {offset=})")
         vtable_struct_name: str = vtable_sptr.get_type_name()
         try:
             funcptr_idx, funcptr_member = vtable_sptr.get_udm_by_offset(offset)
@@ -268,6 +288,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         return funcptr_member_type
 
     def find_funcptr(self, m: ida_typeinf.udm_t) -> ida_typeinf.tinfo_t | None:
+        logging.info(f"in find_funcptr({m=})")
         ancestors = self.get_ancestors()
         if ancestors is None:
             return None
@@ -300,6 +321,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
             e = e.x
 
     def find_ea(self):
+        logging.info(f"in find_ea()")
         i = self.parents.size() - 1
         parent = self.parents.at(i)
         ea = BADADDR
@@ -312,6 +334,7 @@ class Polymorphism_fixer_visitor_t(ida_hexrays.ctree_visitor_t):
         return ea
 
     def visit_expr(self, expr):
+        logging.info(f"in visit_expr({expr=})")
         union_name = self.get_vtables_union_name(expr)
         if union_name is None:
             return 0
@@ -343,6 +366,8 @@ class HexRaysHooks(ida_hexrays.Hexrays_Hooks):
         self.another_decompile_ea = False
 
     def maturity(self, cfunc, maturity):
+        logging.info(f"in maturity({cfunc=}, {maturity=})")
+
         if maturity in [ida_hexrays.CMAT_FINAL]:
             if self.another_decompile_ea:
                 self.another_decompile_ea = None
@@ -368,6 +393,7 @@ class HexRaysHooks(ida_hexrays.Hexrays_Hooks):
         return 0
 
     def refresh_pseudocode(self, vu):
+        logging.info(f"in refresh_pseudocode({vu=})")
         if self.another_decompile_ea:
             logging.debug("decompile again")
             ea = self.another_decompile_ea

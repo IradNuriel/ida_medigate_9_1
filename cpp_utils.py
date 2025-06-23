@@ -80,11 +80,12 @@ def is_member_vtable(member):
     return True
 
 
-def is_struct_vtable(struct):
+def is_struct_vtable(struct: ida_typeinf.tinfo_t):
+    logging.info(f"{struct=}")
     if struct is None:
         return False
-    struct = ida_typeinf.tinfo_t()
-    struct_name = struct.get_type_name(struct.id)
+    struct_name = struct.get_type_name()
+    logging.info(f"{struct_name=}")
     return VTABLE_POSTFIX in struct_name
 
 
@@ -105,11 +106,7 @@ def is_vtables_union_name(union_name):
 def find_vtable_at_offset(struct_ptr: ida_typeinf.tinfo_t, vtable_offset: int):
     current_struct = struct_ptr
     current_offset = 0
-    index, udm = struct_ptr.get_udm_by_offset(vtable_offset)
-    if udm is None:
-        return None
-    sptr = utils.get_sptr_by_name(udm.type.get_type_name())
-    index, member = sptr.get_udm(index)
+    _, member = struct_ptr.get_udm_by_offset(vtable_offset)
     if member is None:
         return None
     parents_vtables_classes = []
@@ -124,16 +121,14 @@ def find_vtable_at_offset(struct_ptr: ida_typeinf.tinfo_t, vtable_offset: int):
                 vtable_offset - current_offset,
             ]
         )
-        index, udm = current_struct.get_udm_by_offset(vtable_offset - current_offset)
-        sptr = utils.get_sptr_by_name(udm.name)
-        member = idc.get_member_by_idx(sptr, index)
+        _, member = current_struct.get_udm_by_offset(vtable_offset - current_offset)
         if member is None:
             logging.exception(
                 "Couldn't find vtable at offset %d for %d",
                 vtable_offset - current_offset,
-                struct_ptr.id,
+                struct_ptr.get_tid(),
             )
-        current_offset += member.get_soff()
+        current_offset += member.offset
 
     if current_offset != vtable_offset:
         return None
@@ -147,7 +142,7 @@ def find_vtable_at_offset(struct_ptr: ida_typeinf.tinfo_t, vtable_offset: int):
         parents_vtables_classes.append(
             [current_struct.get_type_name(), 0]
         )
-        index, member = current_struct.get_udm(index=0)
+        index, member = current_struct.get_udm(0)
 
     return None
 
@@ -190,12 +185,10 @@ def install_vtables_union(
         old_vtable_class_name = get_class_vtable_struct_name(class_name, offset)
         old_vtable_sptr = utils.get_sptr_by_name(old_vtable_class_name)
     vtables_union_name = old_vtable_class_name
-    if old_vtable_sptr and not old_vtable_sptr.rename_type(
-        old_vtable_sptr.id, old_vtable_class_name + "_orig"
-    ):
+    if old_vtable_sptr and (0 != old_vtable_sptr.rename_type(old_vtable_class_name + "_orig")):
         logging.exception(
             f"Failed changing {old_vtable_class_name}->"
-            f"{old_vtable_class_name+'orig'}"
+            f"{old_vtable_class_name+'_orig'}"
         )
         return -1
     vtables_union_id = utils.get_or_create_struct_id(vtables_union_name, True)
@@ -224,11 +217,16 @@ def install_vtables_union(
     struct_size = struct.get_size()
     vtables_union_ptr_type = utils.get_typeinf_ptr(vtables_union_name)
     if class_vtable_member:
-        member_ptr = class_vtable_member
+        logging.info(f"{class_vtable_member=}, {struct=}, {offset=}, {flag=}")
+        index, _ = parent_struct.get_udm_by_offset(class_vtable_member.offset)
     else:
-        ret_val = struct.add_udm(type=mt, offset=offset, etf_flags=flag)
-        member_ptr: ida_typeinf.udm_t = parent_struct.get_udm_by_offset(offset)
-        parent_struct.rename_udm(offset, get_class_vtable_field_name(class_name))
+        index, _ = parent_struct.get_udm_by_offset(class_vtable_member.offset)
+        if index == -1:
+            logging.info(f"{get_class_vtable_field_name(class_name)=}, {struct=}, {offset=}, {flag=}")
+            index, _ = parent_struct.add_udm(get_class_vtable_field_name(class_name), vtables_union_ptr_type, offset, flag)
+    logging.info(f"{get_class_vtable_field_name(class_name)=}, {struct=}, {offset=}, {flag=}")
+    parent_struct.set_udm_type(index, vtables_union_ptr_type, flag)
+    parent_struct.rename_udm(index, get_class_vtable_field_name(class_name))
     return vtables_union
 
 
@@ -251,7 +249,7 @@ def add_child_vtable(parent_name, child_name, child_vtable_id, offset):
     if (
         (pointed_struct is None)
         or (not is_struct_vtable(pointed_struct))
-        or (parent_vtable_struct.id != pointed_struct.id)
+        or (parent_vtable_struct.get_tid() != pointed_struct.get_tid())
     ):
         parent_vtable_member = None
         logging.debug("Not a struct vtable: %s", str(vtable_member_tinfo))
@@ -266,17 +264,17 @@ def add_child_vtable(parent_name, child_name, child_vtable_id, offset):
     child_vtable_name = ida_typeinf.tinfo_t(tid=child_vtable_id).get_type_name()
     child_vtable = utils.get_typeinf(child_vtable_name)
     logging.debug(
-        "add_to_struct %s %s", parent_vtable_struct.id, str(child_vtable)
+        "add_to_struct %s %s", parent_vtable_struct.get_tid(), str(child_vtable)
     )
     if ida_typeinf.tinfo_t(tid=child_vtable_id).get_size() == 0:
         utils.add_to_struct(
             ida_typeinf.tinfo_t(tid=child_vtable_id), "dummy", None
         )
-    new_member = utils.add_to_struct(
+    index, new_member = utils.add_to_struct(
         parent_vtable_struct, get_class_vtables_field_name(child_name), child_vtable
     )
     ida_xref.add_dref(
-        new_member.id, child_vtable_id, ida_xref.XREF_USER | ida_xref.dr_O
+        new_member.type.get_tid(), child_vtable_id, ida_xref.XREF_USER | ida_xref.dr_O
     )
 
 
@@ -339,7 +337,7 @@ def post_func_name_change(new_name, ea):
 
 
 def post_struct_member_name_change(member, new_name):
-    xrefs = idautils.XrefsFrom(member.id)
+    xrefs = idautils.XrefsFrom(member.type.get_tid())
     xrefs = filter(lambda x: x.type == ida_xref.dr_I and x.user == 1, xrefs)
     for xref in xrefs:
         if utils.is_func(xref.to):
@@ -347,7 +345,7 @@ def post_struct_member_name_change(member, new_name):
 
 
 def post_struct_member_type_change(member):
-    xrefs = idautils.XrefsFrom(member.id)
+    xrefs = idautils.XrefsFrom(member.type.get_tid())
     xrefs = filter(lambda x: x.type == ida_xref.dr_I and x.user == 1, xrefs)
     for xref in xrefs:
         if utils.is_func(xref.to):
@@ -375,7 +373,7 @@ def post_func_type_change(pfn):
             member = ida_typeinf.udm_t()
             ida_typeinf.tinfo_t().get_udm_by_tid(member, xref.frm)
             struct = ida_typeinf.tinfo_t(tid=xref.frm)
-            index, _ = struct.get_udm(index=0)
+            index, _ = struct.get_udm(0)
             if member is not None and struct is not None:
                 args_list.append(
                     [struct, index, func_ptr_typeinf, ida_typeinf.TINFO_DEFINITE]
@@ -417,10 +415,8 @@ def update_vtable_struct(
         func_ptr = None
         if ida_hexrays.init_hexrays_plugin():
             if is_name_changed:
-                logging.info("HI")
                 func_type = update_func_this(func, this_type)
             else:
-                logging.info("HI2")
                 func_type = update_func_this(func, None)
             if func_type is not None:
                 func_ptr = utils.get_typeinf_ptr(func_type)
@@ -429,6 +425,8 @@ def update_vtable_struct(
         if add_dummy_member:
             utils.add_to_struct(vtable_struct, f"dummy_{dummy_i}", func_ptr)
             dummy_i += 1
+        if not func_ptr:
+            func_ptr = ida_typeinf.tinfo_t("void (*)(void)")
         if function_count == 0:
             # We did an hack for vtables contained in union vtable with one dummy member
             _, ptr_member = utils.add_to_struct(

@@ -132,7 +132,7 @@ Now you can rebuild class C vtable by selecting it and typing:
 
 Add structure Z, rebuild its vtable too, and now is the cool part:
 
-`cpp_utils.add_baseclass("C", "Z", 0x0c, to_update=True)` which apply C inheritance of Z at offset 0x0c and refresh the struct too (see remarks).
+`cpp_utils.add_baseclass("C", "Z", 0x0c, to_refresh=True)` which apply C inheritance of Z at offset 0x0c and refresh the struct too (see remarks).
 
 The last thing remained is too update the second vtable of C, the one that implements the interface of Z. Mark this vtable and type:
 
