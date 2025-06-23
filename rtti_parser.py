@@ -52,7 +52,7 @@ class RTTIParser(object):
                         "_" + cls.RTTI_OBJ_STRUC_NAME
                     )
             if parent_updated_name is not None:
-                rtti_obj.updated_parents.append((parent_updated_name, offset))
+                rtti_obj.updated_parents.append((parent_updated_name, offset * BYTE_SIZE))
 
         logging.debug("%s: Finish setup parents", rtti_obj.name)
         if not rtti_obj.create_structs():
@@ -84,8 +84,9 @@ class RTTIParser(object):
         previous_parent_size = 0
         previous_parent_struct_id = BADADDR
         for parent_name, parent_offset in self.updated_parents:
+            logging.info(f"{parent_name=}, {parent_offset=}")
             if (
-                parent_offset - previous_parent_offset > previous_parent_size
+                (parent_offset - previous_parent_offset) // utils.BYTE_SIZE > previous_parent_size
                 and previous_parent_struct_id != BADADDR
             ):
                 utils.expand_struct(
@@ -306,7 +307,7 @@ class GccRTTIParser(RTTIParser):
         )
         if func_ea is None:
             return
-        vtable_offset = utils.get_signed_int(ea - utils.WORD_LEN) * (-1)
+        vtable_offset = (utils.get_signed_int(ea - utils.WORD_LEN) * (-1)) * utils.BYTE_SIZE
         vtable_struct, this_type = self.create_vtable_struct(vtable_offset)
         cpp_utils.update_vtable_struct(
             functions_ea,

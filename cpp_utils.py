@@ -1,5 +1,5 @@
 import logging
-from functools import partial
+from functools import partial, lru_cache
 
 import ida_bytes
 import ida_hexrays
@@ -40,9 +40,7 @@ def get_base_member_name(parent_name, offset):
 def get_vtable_line(ea, stop_ea=None, ignore_list=None, pure_virtual_name=None):
     if ignore_list is None:
         ignore_list = []
-    logging.info(f"{ea=}")
     func_ea = utils.get_ptr(ea)
-    logging.info(f"{func_ea=}")
     if (
         utils.is_func(func_ea)
         and (stop_ea is None or ea < stop_ea)
@@ -81,11 +79,9 @@ def is_member_vtable(member):
 
 
 def is_struct_vtable(struct: ida_typeinf.tinfo_t):
-    logging.info(f"{struct=}")
     if struct is None:
         return False
     struct_name = struct.get_type_name()
-    logging.info(f"{struct_name=}")
     return VTABLE_POSTFIX in struct_name
 
 
@@ -170,7 +166,10 @@ def get_interface_empty_vtable_name():
 
 
 def install_vtables_union(
-    class_name, class_vtable_member=None, vtable_member_tinfo=None, offset=0
+    class_name: str,
+    class_vtable_member: ida_typeinf.udm_t=None,
+    vtable_member_tinfo: ida_typeinf.tinfo_t=None,
+    offset=0
 ):
     logging.debug(
         "install_vtables_union(%s, %s, %s)",
@@ -217,16 +216,21 @@ def install_vtables_union(
     struct_size = struct.get_size()
     vtables_union_ptr_type = utils.get_typeinf_ptr(vtables_union_name)
     if class_vtable_member:
-        logging.info(f"{class_vtable_member=}, {struct=}, {offset=}, {flag=}")
-        index, _ = parent_struct.get_udm_by_offset(class_vtable_member.offset)
+        logging.info(f"{class_vtable_member=}, {class_vtable_member=}, {offset=}, {flag=}")
+        index, mem = parent_struct.get_udm_by_offset(class_vtable_member.offset)
     else:
-        index, _ = parent_struct.get_udm_by_offset(class_vtable_member.offset)
+        index, mem = parent_struct.get_udm_by_offset(offset)
         if index == -1:
-            logging.info(f"{get_class_vtable_field_name(class_name)=}, {struct=}, {offset=}, {flag=}")
-            index, _ = parent_struct.add_udm(get_class_vtable_field_name(class_name), vtables_union_ptr_type, offset, flag)
-    logging.info(f"{get_class_vtable_field_name(class_name)=}, {struct=}, {offset=}, {flag=}")
-    parent_struct.set_udm_type(index, vtables_union_ptr_type, flag)
-    parent_struct.rename_udm(index, get_class_vtable_field_name(class_name))
+            logging.info(f"{class_name=}, {vtables_union_ptr_type=}, {offset=}, {flag=}")
+            index, mem = parent_struct.add_udm(get_class_vtable_field_name(class_name), vtables_union_ptr_type, offset, flag)
+    logging.info(f"{mem.name=}")
+    if is_valid_vtable_name(mem.name):
+        logging.info(f"{index=}, {vtables_union_ptr_type=}, {mem.type=}, {flag=}")
+        ret = parent_struct.set_udm_type(index, vtables_union_ptr_type, flag | ida_typeinf.TINFO_DEFINITE)
+        logging.info(f"{ret}")
+        ret = parent_struct.rename_udm(index, get_class_vtable_field_name(class_name))
+        logging.info(f"{ret}")
+        utils.refresh_struct(parent_struct)
     return vtables_union
 
 
@@ -237,7 +241,8 @@ def add_child_vtable(parent_name, child_name, child_vtable_id, offset):
         child_name,
         child_vtable_id,
     )
-    _, parent_vtable_member = utils.get_sptr_by_name(parent_name).get_udm_by_offset(offset)
+    parent_struct = utils.get_sptr_by_name(parent_name)
+    _, parent_vtable_member = parent_struct.get_udm_by_offset(offset)
     vtable_member_tinfo = utils.get_member_tinfo(parent_vtable_member)
     parent_vtable_struct = utils.get_sptr_by_name(
         get_class_vtable_struct_name(parent_name, offset)
@@ -245,7 +250,7 @@ def add_child_vtable(parent_name, child_name, child_vtable_id, offset):
     if parent_vtable_struct is None:
         return None
     pointed_struct = utils.extract_struct_from_tinfo(vtable_member_tinfo)
-    logging.debug("pointed_struct: %s", str(pointed_struct))
+    logging.debug(f"{str(pointed_struct)=}, {str(parent_vtable_struct)=} {str(parent_vtable_member)=}")
     if (
         (pointed_struct is None)
         or (not is_struct_vtable(pointed_struct))
@@ -331,7 +336,7 @@ def post_func_name_change(new_name, ea):
         ida_typeinf.tinfo_t().get_udm_by_tid(member, xref.frm)
         struct = ida_typeinf.tinfo_t(tid=xref.frm)
         if member is not None and struct is not None:
-            args_list.append([struct, member.get_soff(), new_name])
+            args_list.append([struct, member.offset(), new_name])
 
     return utils.set_member_name, args_list
 
@@ -437,7 +442,7 @@ def update_vtable_struct(
                 vtable_struct,
                 new_func_name,
                 func_ptr,
-                function_count * utils.WORD_LEN * 8,
+                function_count * utils.WORD_LEN * utils.BYTE_SIZE,
                 is_offset=True
             )
         if ptr_member is None:
@@ -584,7 +589,7 @@ def create_vtable_struct(sptr, name, vtable_offset, parent_name=None):
         logging.exception("Couldn't create struct %s", vtable_name)
     if parents_chain:
         for parent_name, offset in parents_chain:
-            add_child_vtable(parent_name, name, vtable_struct.get_tid(), offset * 8)
+            add_child_vtable(parent_name, name, vtable_struct.get_tid(), offset * utils.BYTE_SIZE)
     else:
         add_class_vtable(sptr, vtable_name, vtable_offset)
 
@@ -603,7 +608,7 @@ def make_vtable(
     if not vtable_ea and not vtable_ea_stop:
         vtable_ea, vtable_ea_stop = utils.get_selected_range_or_line()
     vtable_struct, this_type = create_vtable_struct(
-        utils.get_or_create_struct(class_name), class_name, offset_in_class * 8,
+        utils.get_or_create_struct(class_name), class_name, offset_in_class * utils.BYTE_SIZE,
         parent_name=parent_name
     )
     logging.info(f"{vtable_ea=}, {vtable_ea_stop=}, ")

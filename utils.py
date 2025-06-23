@@ -21,6 +21,7 @@ from idc import BADADDR
 # WORD length in bytes
 WORD_LEN = None
 NOT_UNION = 0
+BYTE_SIZE = 8
 
 def update_word_len(_=None, old=0):
     global WORD_LEN
@@ -96,15 +97,11 @@ def get_typeinf_ptr(typeinf: str | ida_typeinf.tinfo_t | None):
 
 
 def get_func_details(func_ea):
-    logging.info(f"{func_ea=}")
     xfunc = ida_hexrays.decompile(func_ea)
-    logging.info(f"{xfunc=}")
     if xfunc is None:
         return None
     func_details = ida_typeinf.func_type_data_t()
-    logging.info(f"{func_details=}")
     xfunc.type.get_func_details(func_details)
-    logging.info(f"{func_details=}")
     return func_details
 
 
@@ -132,7 +129,7 @@ def add_to_struct(
         if struct.is_union():
             offset = 0
         else:
-            offset = struct.get_size() * 8
+            offset = struct.get_size() * BYTE_SIZE
 
     mt.tid = member_type.get_tid()
     flag = ida_bytes.FF_DWORD
@@ -174,6 +171,8 @@ def add_to_struct(
                 if i > 250:
                     return -1, None
                 ret_val = struct.rename_udm(index, formatted_member_name)
+        if member.type != member_type:
+            struct.set_udm_type(index, member_type, flag)
 
     else:
         formatted_member_name = member_name
@@ -316,13 +315,13 @@ def expand_struct(struct_id: int, new_size: int):
                 x_struct.add_udm(
                     marker_name,
                     ida_typeinf.BTF_UINT8,
-                    member.offset + (8 * new_size),
+                    member.offset + (BYTE_SIZE * new_size),
                     ida_bytes.FF_DATA | ida_bytes.FF_BYTE,
                 )
                 logging.debug(
-                    "Delete member (0x%x-0x%x)", member.offset, member.offset + 8 * (new_size - 1)
+                    "Delete member (0x%x-0x%x)", member.offset, member.offset + BYTE_SIZE * (new_size - 1)
                 )
-                x_struct.del_udms(member.offset, member.offset + (8 * new_size))
+                x_struct.del_udms(member.offset, member.offset + (BYTE_SIZE * new_size))
                 fix_list.append(
                     [
                         x_struct.get_tid(),
@@ -336,7 +335,7 @@ def expand_struct(struct_id: int, new_size: int):
                 logging.warning("Xref wasn't struct_member 0x%x", xref.frm)
 
     add_to_struct(
-        struct, "anonymous", None, (new_size - WORD_LEN) * 8
+        struct, "anonymous", None, (new_size - WORD_LEN) * BYTE_SIZE
     )
     logging.debug("Now fix args:")
     for fix_args in fix_list:
@@ -355,7 +354,7 @@ def expand_struct(struct_id: int, new_size: int):
             fix_args[4]
         )
         logging.debug(f"{fix_args} = {ret}")
-        temp_udm_index, _ = x_struct.get_udm_by_offset((x_struct.get_size() - 1) * 8)
+        temp_udm_index, _ = x_struct.get_udm_by_offset((x_struct.get_size() - 1) * BYTE_SIZE)
         logging.info(f"{temp_udm_index=}")
         x_struct.del_udm(temp_udm_index, ida_bytes.FF_DATA | ida_bytes.FF_BYTE)
 
